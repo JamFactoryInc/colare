@@ -1,3 +1,6 @@
+use core::fmt;
+use std::{fmt::{Debug, Pointer}, rc::Rc};
+
 use self::{identifiers::IdentifierManager, scope::ScopeManager};
 
 
@@ -11,14 +14,14 @@ pub struct Parser<'src> {
     scope_manaeger: ScopeManager,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 pub enum BracketType {
     Paren,
     Curly,
     Square
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 pub enum LiteralType {
     Char,
     String,
@@ -29,7 +32,14 @@ pub enum LiteralType {
     Bool,
 }
 
-#[derive(Clone, Copy)]
+#[macro_export]
+macro_rules! illegal {
+    ($($t:tt)*) => {
+        Rc::new(move || { format!($($t)*) })
+    };
+}
+
+#[derive(Clone, Debug)]
 pub enum TokenType {
     Keyword,
     Literal(LiteralType),
@@ -41,12 +51,12 @@ pub enum TokenType {
     Open(BracketType),
     Close(BracketType),
     NewLine,
-    TokenError,
+    TokenError(fn(&Token) -> String),
 }
 
 impl TokenType {
     #[inline(always)]
-    pub const fn from_single(c: char) -> TokenType {
+    pub fn from_single(c: char) -> TokenType {
         match c {
             '(' => TokenType::Open(BracketType::Paren),
             ')' => TokenType::Close(BracketType::Paren),
@@ -56,27 +66,44 @@ impl TokenType {
             '}' => TokenType::Close(BracketType::Curly),
             '\n' => TokenType::NewLine,
             ',' => TokenType::Delimeter,
-            _ => TokenType::TokenError
+            _ => TokenType::TokenError(|t| format!("")),
         }
     }
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 pub enum OpType {
     Add,
+    AddEq,
     Sub,
+    SubEq,
     Mul,
+    MulEq,
     Div,
+    DivEq,
     Mod,
+    ModEq,
     And,
+    BitAnd,
+    BitAndEq,
     Or,
-    Xor,
+    BitOr,
+    BitOrEq,
+    XOr,
+    XOrEq,
     Not,
+    NotEq,
     Eq,
+    DoubleEq,
     Lt,
+    LtEq,
     Gt,
+    GtEq,
+    Shr,
+    Shl,
     Range,
-    RangeInclusive,
+    RangeEq,
+    TypeAssign,
     Err
 }
 
@@ -89,13 +116,31 @@ impl OpType {
             '*' => OpType::Mul,
             '/' => OpType::Div,
             '%' => OpType::Mod,
-            '&' => OpType::And,
-            '|' => OpType::Or,
-            '^' => OpType::Xor,
+            '&' => OpType::BitAnd,
+            '|' => OpType::BitOr,
+            '^' => OpType::XOr,
             '=' => OpType::Eq,
             '<' => OpType::Gt,
             '>' => OpType::Lt,
+            ':' => OpType::TypeAssign,
             _ => OpType::Err
+        }
+    }
+
+    #[inline(always)]
+    pub const fn before_eq(op_type: OpType) -> OpType {
+        match op_type {
+            OpType::Add => OpType::AddEq,
+            OpType::Sub => OpType::SubEq,
+            OpType::Mul => OpType::MulEq,
+            OpType::Div => OpType::DivEq,
+            OpType::Mod => OpType::ModEq,
+            OpType::BitAnd => OpType::BitAndEq,
+            OpType::Or => OpType::BitOrEq,
+            OpType::XOr => OpType::XOrEq,
+            OpType::Not => OpType::NotEq,
+            OpType::Eq => OpType::DoubleEq,
+            _ => OpType::Err,
         }
     }
 }
@@ -107,15 +152,35 @@ pub struct Span<'src> {
     column_number: u32,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 pub struct Token<'src> {
     span: Span<'src>,
     token_type: TokenType
 }
 
+impl<'src> Debug for Token<'src> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_fmt(format_args!("({}:{} {:?} {:?}) ",
+            self.span.line_number,
+            self.span.column_number,
+            self.token_type,
+            self.span.contents
+        ))
+    }
+}
+
 #[derive(Default, Clone)]
 pub struct TokenStream<'src> {
     stream: Vec<Token<'src>>
+}
+
+impl<'src> Debug for TokenStream<'src> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        for token in self.stream.iter() {
+            f.write_fmt(format_args!("{token:?}"))?
+        }
+        Ok(())
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -130,7 +195,7 @@ pub enum BlockType {
     Type,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 pub enum ParseTokenVariant<'src> {
     Directive(ParseDirectiveType),
     EndDirective(ParseDirectiveType),
