@@ -117,7 +117,7 @@ impl Lexer {
             InIdent => {
                 parse_state.finish_token(end, TokenType::Identifier, 0);
             }
-            SeenOp(op_type) => {
+            SeenOp(_) => {
                 parse_state.start_token(end)
                     .finish_token(end, TokenType::TokenError(TokenErrorType::UnexpectedEndOfInput), 0);
             }

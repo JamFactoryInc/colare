@@ -150,6 +150,46 @@ mod lexer_tests {
     }
 
     #[test]
+    fn test_double_string_literal() -> Result<(), ()> {
+        let src = "abc \"123'abc\"";
+        Lexer::lex(src)
+            .assert_matches(&[
+                ("abc", TokenType::Identifier),
+                ("\"123'abc\"", TokenType::Literal(LiteralType::DoubleString)),
+            ]).map_err(|e| panic!("{e}"))
+    }
+
+    #[test]
+    fn test_double_string_literal_escaped() -> Result<(), ()> {
+        let src = "abc \"12\\\\ \\\"3'abc\"";
+        Lexer::lex(src)
+            .assert_matches(&[
+                ("abc", TokenType::Identifier),
+                ("\"12\\\\ \\\"3'abc\"", TokenType::Literal(LiteralType::DoubleString)),
+            ]).map_err(|e| panic!("{e}"))
+    }
+
+    #[test]
+    fn test_single_string_literal() -> Result<(), ()> {
+        let src = "abc \'123\"abc\'";
+        Lexer::lex(src)
+            .assert_matches(&[
+                ("abc", TokenType::Identifier),
+                ("\'123\"abc\'", TokenType::Literal(LiteralType::SingleString)),
+            ]).map_err(|e| panic!("{e}"))
+    }
+
+    #[test]
+    fn test_single_string_literal_escaped() -> Result<(), ()> {
+        let src = "abc \'12\\\\ \\\'3\"abc\'";
+        Lexer::lex(src)
+            .assert_matches(&[
+                ("abc", TokenType::Identifier),
+                ("\'12\\\\ \\\'3\"abc\'", TokenType::Literal(LiteralType::SingleString)),
+            ]).map_err(|e| panic!("{e}"))
+    }
+
+    #[test]
     fn test_keywords() -> Result<(), ()> {
         Lexer::lex("as bool break byte const continue double else float fn for if in int ref return string struct unt")
             .assert_matches(&[
@@ -188,6 +228,31 @@ mod lexer_tests {
                 ("A1", TokenType::Identifier),
                 ("_0", TokenType::Identifier),
                 ("_9", TokenType::Identifier),
+            ]).map_err(|e| panic!("{e}"))
+    }
+
+    #[test]
+    fn test_newline() -> Result<(), ()> {
+        let src = "abc\nabc;abc\r";
+        Lexer::lex(src)
+            .assert_matches(&[
+                ("abc", TokenType::Identifier),
+                ("\n", TokenType::NewLine),
+                ("abc", TokenType::Identifier),
+                (";", TokenType::NewLine),
+                ("abc", TokenType::Identifier),
+                ("\r", TokenType::NewLine),
+            ]).map_err(|e| panic!("{e}"))
+    }
+
+    #[test]
+    fn test_comment() -> Result<(), ()> {
+        let src = "abc# abc\ndef";
+        Lexer::lex(src)
+            .assert_matches(&[
+                ("abc", TokenType::Identifier),
+                ("\n", TokenType::NewLine),
+                ("def", TokenType::Identifier),
             ]).map_err(|e| panic!("{e}"))
     }
 }
