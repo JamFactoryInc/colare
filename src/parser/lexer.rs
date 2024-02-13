@@ -1,6 +1,5 @@
-use super::{LiteralType, OpType, Span, Token, TokenStream, TokenType};
+use super::{keyword::{self, Keyword, KeywordMatchType, KEYWORDS}, token::{LiteralType, TokenErrorType, TokenStream, TokenType}, OpType, Span, Token};
 use self::ParseStateType::*;
-
 
 pub struct Lexer;
 
@@ -19,6 +18,8 @@ enum ParseStateType {
     // we've seen the range operator ..
     // but it might be ..=
     SeenTwoDecimals,
+    SeenDecimalAfterNumber,
+    SeenTwoDecimalsAfterNumber,
     // we've seen a decimal following a number
     InHexLiteral,
     InBinaryLiteral,
@@ -48,6 +49,8 @@ impl Lexer {
                 LeadingZero => parse_state.handle_leading_zero(c, i),
                 SeenDecimal => parse_state.handle_seen_decimal(c, i),
                 SeenTwoDecimals => parse_state.handle_seen_two_decimals(c, i),
+                SeenDecimalAfterNumber => parse_state.handle_seen_decimal_after_number(c, i),
+                SeenTwoDecimalsAfterNumber => parse_state.handle_seen_two_decimals_after_number(c, i),
                 InHexLiteral => parse_state.handle_in_hex_literal(c, i),
                 InBinaryLiteral => parse_state.handle_in_bin_literal(c, i),
                 InFloat => parse_state.handle_in_float(c, i),
@@ -62,6 +65,68 @@ impl Lexer {
             }
 
             parse_state.column_number *= is_new_line ^ 0b1;
+        }
+
+        let end = src.len() - 1;
+        match parse_state.state_type {
+            Initial => {},
+            InNumber => {
+                parse_state.finish_token(end, TokenType::Literal(LiteralType::Int), 0);
+            },
+            LeadingZero => {
+                parse_state.finish_token(end, TokenType::Literal(LiteralType::Int), 0);
+            }
+            SeenDecimal => {
+                parse_state.start_token(end)
+                    .finish_token(end, TokenType::TokenError(TokenErrorType::UnexpectedEndOfInput), 0);
+            }
+            SeenTwoDecimals => {
+                parse_state.finish_token(end, TokenType::Operator(OpType::Range), 0);
+            }
+            SeenDecimalAfterNumber => {
+                parse_state.finish_token(end, TokenType::Literal(LiteralType::Float), 0);
+            }
+            SeenTwoDecimalsAfterNumber => {
+                parse_state.finish_token(end, TokenType::Operator(OpType::Range), 0);
+            }
+            InHexLiteral => {
+                parse_state.finish_token(end, TokenType::Literal(LiteralType::Hex), 0);
+            }
+            InBinaryLiteral => {
+                parse_state.finish_token(end, TokenType::Literal(LiteralType::Binary), 0);
+            }
+            InFloat => {
+                parse_state.finish_token(end, TokenType::Literal(LiteralType::Float), 0);
+            }
+            InDoubleString => {
+                parse_state.start_token(end)
+                    .finish_token(end, TokenType::TokenError(TokenErrorType::UnexpectedEndOfInput), 0);
+            }
+            InDoubleStringEscaped => {
+                parse_state.start_token(end)
+                    .finish_token(end, TokenType::TokenError(TokenErrorType::UnexpectedEndOfInput), 0);
+            }
+            InSingleString => {
+                parse_state.start_token(end)
+                    .finish_token(end, TokenType::TokenError(TokenErrorType::UnexpectedEndOfInput), 0);
+            }
+            InSingleStringEscaped => {
+                parse_state.start_token(end)
+                    .finish_token(end, TokenType::TokenError(TokenErrorType::UnexpectedEndOfInput), 0);
+            }
+            InIdent => {
+                parse_state.finish_token(end, TokenType::Identifier, 0);
+            }
+            SeenOp(op_type) => {
+                parse_state.start_token(end)
+                    .finish_token(end, TokenType::TokenError(TokenErrorType::UnexpectedEndOfInput), 0);
+            }
+            InSingleLineComment => {
+
+            }
+            IllegalToken => {
+                parse_state.finish_token(end, TokenType::TokenError(TokenErrorType::UnexpectedToken), 0);
+            }
         }
 
         parse_state.token_stream
@@ -87,17 +152,25 @@ impl<'src> ParseState<'src> {
     }
 
     fn finish_token(&mut self, end_index: usize, token_type: TokenType, offset: isize) -> &mut Self {
-        let new_token = Token {
+        let contents = &self.source[self.token_start..=(end_index as isize + offset) as usize];
 
-            span: Span {
-                contents: &self.source[self.token_start..=(end_index as isize + offset) as usize],
-                line_number: self.line_number as u32,
-                column_number: (self.column_number as isize + offset) as u32,
-            },
-            token_type,
-        };
+        let new_token = Token::new(
+            Span::new(
+                contents,
+                self.line_number as u32,
+                (self.column_number as isize + offset) as u32
+            ),
+            if TokenType::Identifier == token_type {
+                match Keyword::is_keyword(contents) {
+                    Some(keyword) => TokenType::Keyword(keyword),
+                    None => TokenType::Identifier,
+                }
+            } else {
+                token_type
+            }
+        );
         self.token_start = end_index;
-        self.token_stream.stream.push(new_token);
+        self.token_stream.push(new_token);
         self
     }
     
@@ -117,7 +190,8 @@ impl<'src> ParseState<'src> {
                 self.state(return_state);
             },
             _ => {
-                self.state(IllegalToken);
+                self.start_token(i)
+                    .finish_token(i, TokenType::TokenError(TokenErrorType::UnknownEscapeCharacter), 0);
             }
         }
     }
@@ -208,8 +282,8 @@ impl<'src> ParseState<'src> {
         match c {
             '0'..='9' | '_' => {},
             '.' => {
-                self.state(InFloat);
-            }
+                self.state(SeenDecimalAfterNumber);
+            },
             _ => {
                 self.state(Initial)
                 .handle_end_literal(c, i, LiteralType::Int)
@@ -227,34 +301,41 @@ impl<'src> ParseState<'src> {
             'x' | 'X' => {
                 self.start_token(i - 1)
                     .state(InHexLiteral);
-            }
+            },
             '.' => {
                 self.start_token(i - 1)
                     .state(InFloat);
-            }
+            },
             '1'..='9' => {
                 self.start_token(i)
                     .state(InNumber);
-            }
+            },
             _ => {
                 self.state(Initial)
                     .handle_end_literal(c, i, LiteralType::Int)
-            }
+            },
         }
     }
 
-    fn handle_seen_decimal(&mut self, c: char, _: usize) {
+    fn handle_seen_decimal(&mut self, c: char, i: usize) {
         match c {
             ' ' | '\t' => {},
             '.' => {
                 self.state(SeenTwoDecimals);
-            }
+            },
             '0'..='9' => {
                 self.state(InFloat);
+            },
+            'a'..='z' | 'A'..='Z' | '_' => {
+                self.finish_token(i, TokenType::Operator(OpType::Access), -1)
+                    .start_token(i)
+                    .state(InIdent);
             }
             _ => {
-                self.state(IllegalToken);
-            }
+                self.start_token(i)
+                    .finish_token(i, TokenType::TokenError(TokenErrorType::UnexpectedToken), 0)
+                    .state(IllegalToken);
+            },
         }
     }
 
@@ -265,9 +346,48 @@ impl<'src> ParseState<'src> {
                     .state(Initial);
             },
             _ => {
-                self.finish_token(i, TokenType::Operator(OpType::Range), 0);
-                self.handle_initial(c, i);
+                self.finish_token(i, TokenType::Operator(OpType::Range), -1)
+                    .handle_initial(c, i);
+            },
+        }
+    }
+
+    fn handle_seen_decimal_after_number(&mut self, c: char, i: usize) {
+        match c {
+            ' ' | '\t' => {
+                self.finish_token(i, TokenType::Literal(LiteralType::Float), 0)
+                    .state(Initial);
+            },
+            '.' => {
+                self.state(SeenTwoDecimalsAfterNumber);
+            },
+            '0'..='9' => {
+                self.state(InFloat);
+            },
+            _ => {
+                self.start_token(i)
+                    .finish_token(i, TokenType::TokenError(TokenErrorType::UnexpectedToken), 0)
+                    .state(IllegalToken);
+            },
+        }
+    }
+
+    fn handle_seen_two_decimals_after_number(&mut self, c: char, i: usize) {
+        match c {
+            '=' => {
+                self.finish_token(i, TokenType::Operator(OpType::RangeEq), 0)
+                    .state(Initial);
+            },
+            '.' => {
+                self.finish_token(i, TokenType::Literal(LiteralType::Float), -2)
+                    .state(SeenTwoDecimals);
             }
+            _ => {
+                self.finish_token(i, TokenType::Operator(OpType::Range), -1)
+                    .state(Initial)
+                    .handle_initial(c, i);
+                    
+            },
         }
     }
 
@@ -277,7 +397,7 @@ impl<'src> ParseState<'src> {
             _ => {
                 self.state(Initial)
                     .handle_end_literal(c, i, LiteralType::Hex)
-            }
+            },
         }
     }
 
@@ -287,7 +407,7 @@ impl<'src> ParseState<'src> {
             _ => {
                 self.state(Initial)
                     .handle_end_literal(c, i, LiteralType::Binary)
-            }
+            },
         }
     }
 
@@ -304,7 +424,7 @@ impl<'src> ParseState<'src> {
     fn handle_in_double_string(&mut self, c: char, i: usize) {
         match c {
             '"' => {
-                self.finish_token(i, TokenType::DoubleString, 0)
+                self.finish_token(i, TokenType::Literal(LiteralType::DoubleString), 0)
                     .state(Initial);
             },
             '\\' => {
@@ -321,7 +441,7 @@ impl<'src> ParseState<'src> {
     fn handle_in_single_string(&mut self, c: char, i: usize) {
         match c {
             '\'' => {
-                self.finish_token(i, TokenType::SingleString, 0)
+                self.finish_token(i, TokenType::Literal(LiteralType::SingleString), 0)
                     .state(Initial);
             },
             '\\' => {
@@ -341,7 +461,7 @@ impl<'src> ParseState<'src> {
                 self.finish_token(i, TokenType::Identifier, -1)
                     .state(Initial)
                     .start_token(i).finish_token(i, TokenType::NewLine, 0);
-            }
+            },
             'a'..='z' | 'A'..='Z' | '_' | '0'..='9' => {},
             _ => {
                 self.finish_token(i, TokenType::Identifier, -1)
@@ -396,16 +516,17 @@ impl<'src> ParseState<'src> {
     }
 
     fn handle_illegal_token(&mut self, c: char, i: usize) {
-        let token_error = TokenType::TokenError(|t| {
-            format!("Unexpected token '{}'", t.span.contents)
-        });
+        let token_error = TokenType::TokenError(TokenErrorType::UnexpectedToken);
         match c {
             '\n' | '\r' | ';' => {
                 self.finish_token(i, token_error, -1)
                     .start_token(i)
                     .finish_token(i, TokenType::NewLine, 0);
             }
-            ' ' | '\t' => {},
+            ' ' | '\t' => {
+                self.finish_token(i, token_error, -1)
+                    .state(Initial);
+            },
             '0' => {
                 self.finish_token(i, token_error, -1)
                     .state(LeadingZero);
@@ -436,7 +557,8 @@ impl<'src> ParseState<'src> {
                     .start_token(i);
             },
             '+' | '-' | '*' | '/' | '%' | '&' | '|' | '^' | '!' | '=' | '<' | '>' | ':' => {
-                self.state(SeenOp(OpType::from_single(c)))
+                self.finish_token(i, token_error, -1)
+                    .state(SeenOp(OpType::from_single(c)))
                     .start_token(i);
             },
             _ => {},
