@@ -14,7 +14,7 @@ impl<'src> Matcher<&[(&str, TokenType)]> for TokenStream<'src> {
     fn assert_matches(&self, expected: &[(&str, TokenType)]) -> Result<(), String> {
         if expected.len() != self.len() {
             return Err(format!(
-                "Expected {:?} but got {:?}",
+                "Expected \n{:?}\n{:?}\nbut this was received",
                 expected.iter().map(|t| t.0).collect::<Vec<_>>(),
                 self.iter().map(|t| t.contents()).collect::<Vec<_>>()
             ));
@@ -22,14 +22,14 @@ impl<'src> Matcher<&[(&str, TokenType)]> for TokenStream<'src> {
         for (actual, e) in self.iter().zip(expected.iter()) {
             if actual.token_type() != e.1 {
                 return Err(format!(
-                    "Expected {:?} but got {:?}",
+                    "Expected \n{:?}\n{:?}\nbut this was received",
                     expected.iter().map(|t| t.1).collect::<Vec<_>>(),
                     self.iter().map(|t| t.token_type()).collect::<Vec<_>>()
                 ));
             }
             if actual.contents() != e.0 {
                 return Err(format!(
-                    "Expected {:?} but got {:?}",
+                    "Expected \n{:?}\n{:?}\nbut this was received",
                     expected.iter().map(|t| t.0).collect::<Vec<_>>(),
                     self.iter().map(|t| t.contents()).collect::<Vec<_>>()
                 ));

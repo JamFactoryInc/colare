@@ -48,9 +48,10 @@ impl OpType {
             '&' => OpType::BitAnd,
             '|' => OpType::BitOr,
             '^' => OpType::XOr,
+            '!' => OpType::Not,
             '=' => OpType::Eq,
-            '<' => OpType::Gt,
-            '>' => OpType::Lt,
+            '<' => OpType::Lt,
+            '>' => OpType::Gt,
             ':' => OpType::TypeAssign,
             '.' => OpType::Access,
             _ => OpType::Err

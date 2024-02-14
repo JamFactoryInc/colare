@@ -1,4 +1,4 @@
-use super::{keyword::{self, Keyword, KeywordMatchType, KEYWORDS}, token::{LiteralType, TokenErrorType, TokenStream, TokenType}, OpType, Span, Token};
+use super::{keyword::{self, Keyword, KEYWORDS}, token::{LiteralType, TokenErrorType, TokenStream, TokenType}, OpType, Span, Token};
 use self::ParseStateType::*;
 
 pub struct Lexer;
@@ -87,7 +87,9 @@ impl Lexer {
                 parse_state.finish_token(end, TokenType::Literal(LiteralType::Float), 0);
             }
             SeenTwoDecimalsAfterNumber => {
-                parse_state.finish_token(end, TokenType::Operator(OpType::Range), 0);
+                parse_state.finish_token(end, TokenType::Literal(LiteralType::Int), -2)
+                    .start_token(end - 1)
+                    .finish_token(end, TokenType::Operator(OpType::Range), 0);
             }
             InHexLiteral => {
                 parse_state.finish_token(end, TokenType::Literal(LiteralType::Hex), 0);
@@ -152,7 +154,18 @@ impl<'src> ParseState<'src> {
     }
 
     fn finish_token(&mut self, end_index: usize, token_type: TokenType, offset: isize) -> &mut Self {
-        let contents = &self.source[self.token_start..=(end_index as isize + offset) as usize];
+        self.add_token(self.token_start, end_index, token_type, offset);
+        self.token_start = end_index;
+        self
+    }
+    
+    fn start_token(&mut self, start_index: usize) -> &mut Self {
+        self.token_start = start_index;
+        self
+    }
+
+    fn add_token(&mut self, start_index: usize, end_index: usize, token_type: TokenType, offset: isize) -> &mut Self {
+        let contents = &self.source[start_index..=(end_index as isize + offset) as usize];
 
         let new_token = Token::new(
             Span::new(
@@ -169,13 +182,7 @@ impl<'src> ParseState<'src> {
                 token_type
             }
         );
-        self.token_start = end_index;
         self.token_stream.push(new_token);
-        self
-    }
-    
-    fn start_token(&mut self, start_index: usize) -> &mut Self {
-        self.token_start = start_index;
         self
     }
 
@@ -190,8 +197,8 @@ impl<'src> ParseState<'src> {
                 self.state(return_state);
             },
             _ => {
-                self.start_token(i)
-                    .finish_token(i, TokenType::TokenError(TokenErrorType::UnknownEscapeCharacter), 0);
+                self.add_token(i - 1, i, TokenType::TokenError(TokenErrorType::UnknownEscapeCharacter), 0)
+                    .state(return_state);
             }
         }
     }
@@ -200,7 +207,7 @@ impl<'src> ParseState<'src> {
         match c {
             ' ' | '\t'
                 => {
-                self.finish_token(i, TokenType::Literal(lit_type), 0)
+                self.finish_token(i, TokenType::Literal(lit_type), -1)
                     .state(Initial);
             },
             ';' | '\n' => {
@@ -212,7 +219,7 @@ impl<'src> ParseState<'src> {
                 | '[' | ']'
                 | '{' | '}'
                 | ',' => {
-                self.finish_token(i, TokenType::Literal(lit_type), 0)
+                self.finish_token(i, TokenType::Literal(lit_type), -1)
                     .start_token(i)
                     .finish_token(i, TokenType::from_single(c), 0)
                     .state(Initial);
@@ -222,8 +229,8 @@ impl<'src> ParseState<'src> {
                     .start_token(i)
                     .state(InSingleLineComment);
             }
-            '+' | '-' | '*' | '/' | '%' | '&' | '|' | '^' | '=' | '<' | '>' | ':' => {
-                self.finish_token(i, TokenType::Literal(lit_type), 0)
+            '+' | '-' | '*' | '/' | '%' | '&' | '|' | '^' | '!' | '=' | '<' | '>' | ':' => {
+                self.finish_token(i, TokenType::Literal(lit_type), -1)
                     .start_token(i)
                     .state(SeenOp(OpType::from_single(c)));
             },
@@ -263,6 +270,14 @@ impl<'src> ParseState<'src> {
             '.' => {
                 self.state(SeenDecimal)
                     .start_token(i);
+            },
+            '(' | ')'
+                | '[' | ']'
+                | '{' | '}'
+                | ',' => {
+                self.start_token(i)
+                    .finish_token(i, TokenType::from_single(c), 0)
+                    .state(Initial);
             },
             '+' | '-' | '*' | '/' | '%' | '&' | '|' | '^' | '!' | '=' | '<' | '>' | ':' => {
                 self.state(SeenOp(OpType::from_single(c)))
@@ -347,6 +362,7 @@ impl<'src> ParseState<'src> {
             },
             _ => {
                 self.finish_token(i, TokenType::Operator(OpType::Range), -1)
+                    .state(Initial)
                     .handle_initial(c, i);
             },
         }
@@ -354,10 +370,6 @@ impl<'src> ParseState<'src> {
 
     fn handle_seen_decimal_after_number(&mut self, c: char, i: usize) {
         match c {
-            ' ' | '\t' => {
-                self.finish_token(i, TokenType::Literal(LiteralType::Float), 0)
-                    .state(Initial);
-            },
             '.' => {
                 self.state(SeenTwoDecimalsAfterNumber);
             },
@@ -365,9 +377,7 @@ impl<'src> ParseState<'src> {
                 self.state(InFloat);
             },
             _ => {
-                self.start_token(i)
-                    .finish_token(i, TokenType::TokenError(TokenErrorType::UnexpectedToken), 0)
-                    .state(IllegalToken);
+                self.handle_end_literal(c, i, LiteralType::Float)
             },
         }
     }
@@ -375,15 +385,20 @@ impl<'src> ParseState<'src> {
     fn handle_seen_two_decimals_after_number(&mut self, c: char, i: usize) {
         match c {
             '=' => {
-                self.finish_token(i, TokenType::Operator(OpType::RangeEq), 0)
+                self.finish_token(i, TokenType::Literal(LiteralType::Int), -3)
+                    .start_token(i - 2)
+                    .finish_token(i, TokenType::Operator(OpType::RangeEq), 0)
                     .state(Initial);
             },
             '.' => {
                 self.finish_token(i, TokenType::Literal(LiteralType::Float), -2)
+                    .start_token(i - 1)
                     .state(SeenTwoDecimals);
             }
             _ => {
-                self.finish_token(i, TokenType::Operator(OpType::Range), -1)
+                self.finish_token(i, TokenType::Literal(LiteralType::Int), -3)
+                    .start_token(i - 2)
+                    .finish_token(i, TokenType::Operator(OpType::Range), -1)
                     .state(Initial)
                     .handle_initial(c, i);
                     
